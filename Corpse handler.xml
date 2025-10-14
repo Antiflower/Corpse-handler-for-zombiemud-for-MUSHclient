@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE muclient>
+<muclient>
+
+<plugin
+   name="Corpse_Handler"
+   author="YourName"
+   id="f9e8d7c6b5a4f3e2d1c0b9a8"
+   language="Lua"
+   purpose="Manages different corpse handling modes"
+   save_state="y"
+   date_written="2025-10-12"
+   requires="4.00"
+   version="1.0"
+   >
+<description trim="y">
+<![CDATA[
+Dynamic corpse handling plugin for ZombieMUD.
+Type: corpsemode tin|drain|totem|collect|off
+Totem mode automatically falls back to tinning if a totem already exists.
+]]>
+</description>
+</plugin>
+
+<aliases>
+  <alias
+   match="corpsemode *"
+   enabled="y"
+   regexp="n"
+   ignore_case="y"
+   sequence="100"
+   script="SetCorpseMode"
+  >
+  </alias>
+</aliases>
+
+<triggers>
+  <trigger
+   name="CorpseHandlerDeath"
+   enabled="y"
+   match="* is DEAD, R.I.P."
+   regexp="n"
+   script="HandleCorpse"
+   send_to="12"
+   sequence="95"
+  >
+  </trigger>
+  
+  <trigger
+   name="TotemExistsFallback"
+   enabled="y"
+   match="There already is a vile totem here!"
+   regexp="n"
+   script="FallbackToTin"
+   send_to="12"
+   sequence="95"
+  >
+  </trigger>
+</triggers>
+
+<script>
+<![CDATA[
+
+-- Default mode
+local default_mode = "tin"
+
+-- Flag to track if we're waiting for totem response
+waiting_for_totem = false
+
+-- Valid corpse handling modes
+local valid_modes = {
+  tin = true,
+  drain = true,
+  totem = true,
+  collect = true,
+  off = true
+}
+
+-- Commands for each mode
+local mode_commands = {
+  tin = {
+    "put noeq in bag",
+    "tin corpse",
+    "get can",
+    "eat can"
+  },
+  drain = {
+    "put noeq in bag",
+    "sdrain corpse"
+  },
+  totem = {
+    "put noeq in bag",
+    "use vile totem at corpse"
+  },
+  collect = {
+    "put noeq in bag",
+    "get corpse",
+    "put corpse in carriage"
+  },
+  off = {}
+}
+
+function SetCorpseMode(name, line, wildcards)
+  -- Extract the mode from the command line
+  local mode = line:match("corpsemode%s+(%S+)")
+  
+  if not mode then
+    Note("Usage: corpsemode <mode>")
+    Note("Valid modes: tin, drain, totem, collect, off")
+    Note("Current mode: " .. GetCurrentMode())
+    return
+  end
+  
+  mode = mode:lower()
+  
+  if not valid_modes[mode] then
+    Note("Invalid corpse mode: " .. mode)
+    Note("Valid modes: tin, drain, totem, collect, off")
+    Note("Current mode: " .. GetCurrentMode())
+    return
+  end
+  
+  SetVariable("corpse_mode", mode)
+  ColourNote("yellow", "", "Corpse handling mode set to: " .. mode)
+  
+  if mode ~= "off" then
+    ColourNote("cyan", "", "Commands on death:")
+    for _, cmd in ipairs(mode_commands[mode]) do
+      ColourNote("cyan", "", "  - " .. cmd)
+    end
+    if mode == "totem" then
+      ColourNote("cyan", "", "  (Falls back to tinning if totem already exists)")
+    end
+  else
+    ColourNote("cyan", "", "Corpse handling disabled")
+  end
+end
+
+function GetCurrentMode()
+  local mode = GetVariable("corpse_mode")
+  if not mode or not valid_modes[mode] then
+    mode = default_mode
+    SetVariable("corpse_mode", mode)
+  end
+  return mode
+end
+
+function HandleCorpse(name, line, wildcards)
+  local mode = GetCurrentMode()
+  
+  if mode == "off" then
+    return
+  end
+  
+  local commands = mode_commands[mode]
+  if not commands then
+    Note("Error: Unknown corpse mode '" .. mode .. "'")
+    return
+  end
+  
+  if mode == "totem" then
+    waiting_for_totem = true
+    DoAfterSpecial(2, "waiting_for_totem = false", sendto.script)
+  end
+  
+  -- Execute commands with delays - add 0.3s initial delay before first command
+  for i, cmd in ipairs(commands) do
+    local delay = 0.3 + ((i - 1) * 0.5)  -- Starts at 0.3s, then 0.5s between each
+    DoAfterSpecial(delay, "Send('" .. cmd .. "')", sendto.script)
+  end
+end
+
+function FallbackToTin(name, line, wildcards)
+  if not waiting_for_totem then
+    return
+  end
+  
+  waiting_for_totem = false
+  
+  ColourNote("orange", "", "Totem already exists - falling back to tinning")
+  
+  -- Full tin sequence including the initial put command
+  local tin_commands = {"put noeq in bag", "tin corpse", "get can", "eat can"}
+  
+  -- Add a small initial delay to let the failed totem command finish
+  for i, cmd in ipairs(tin_commands) do
+    local delay = 0.3 + ((i - 1) * 0.5)  -- Start at 0.3 seconds, then 0.5s between each
+    DoAfterSpecial(delay, "Send('" .. cmd .. "')", sendto.script)
+  end
+end
+
+function OnPluginInstall()
+  Note("Corpse Handler plugin loaded")
+  Note("Use 'corpsemode <mode>' to change corpse handling")
+  Note("Valid modes: tin, drain, totem, collect, off")
+  Note("Current mode: " .. GetCurrentMode())
+end
+
+function OnPluginEnable()
+  Note("Current corpse handling mode: " .. GetCurrentMode())
+end
+
+]]>
+</script>
+
+</muclient>
