@@ -1,0 +1,549 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE muclient>
+
+<!-- Combined plugin merging 2-vulntracker.xml + Corpse handler.xml -->
+
+<muclient>
+<plugin
+   name="Combat_Manager"
+   author="Combined by Claude"
+   id="a1b2c3d4e5f6a7b8c9d0e1f4"
+   language="Lua"
+   purpose="Manages vulnerability timers, round counting, and corpse handling"
+   save_state="y"
+   date_written="2025-11-28"
+   requires="4.00"
+   version="1.1"
+   >
+<description trim="y">
+<![CDATA[
+Combined combat management plugin for ZombieMUD.
+
+VULNERABILITY TRACKING:
+- Tracks all 9 vulnerability spell types
+- Auto-announces "Vuln Up" to party when cast
+- Auto-announces "Vuln Down" after 27 seconds
+- Cancels timers automatically on creature death
+
+ROUND COUNTER:
+- Tracks combat rounds from "NEW ROUND" messages
+- Displays total rounds when combat ends
+- Auto-resets on creature death
+
+CORPSE HANDLING:
+- Multiple modes: tin, drain, totem, collect, ranger, troll, archer, off
+- Automatic corpse processing on creature death
+- Totem mode with fallback to tinning if totem exists
+- Archer mode includes quiver storage for arrows/bolts
+- Ignores troll regeneration mobs (flesh pieces)
+
+Commands:
+  corpsemode [mode]  - Set corpse handling mode
+                       Valid: tin, drain, totem, collect, ranger, troll, archer, off
+
+Vulnerability spells tracked:
+  - Physical (afflictus corpus)
+  - Fire (ardens amictus)
+  - Cold (aufero fervens)
+  - Electric (fulmen infractus)
+  - Psionic (ignavus animus)
+  - Asphyx (infirmus respiro)
+  - Acid (macilentus corium)
+  - Poison (macula valetudo)
+  - Magic (magus foramen)
+]]>
+</description>
+
+</plugin>
+
+<!-- ==================== ALIASES ==================== -->
+
+<aliases>
+  <alias
+   match="corpsemode *"
+   enabled="y"
+   regexp="n"
+   ignore_case="y"
+   script="SetCorpseMode"
+   sequence="100"
+  >
+  </alias>
+</aliases>
+
+<!-- ==================== TRIGGERS ==================== -->
+
+<triggers>
+
+<!-- ========== VULNERABILITY TRIGGERS ========== -->
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'afflictus corpus'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'ardens amictus'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'aufero fervens'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'fulmen infractus'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'ignavus animus'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'infirmus respiro'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'macilentus corium'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'macula valetudo'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+  <trigger
+   custom_colour="14"
+   enabled="y"
+   group="Vuln"
+   match="You utter the magic words 'magus foramen'"
+   send_to="12"
+   sequence="100"
+   script="StartVuln"
+  >
+  </trigger>
+
+<!-- ========== ROUND COUNTER ========== -->
+
+  <trigger
+   name="RoundStart"
+   group="RoundCounter"
+   match="*NEW ROUND*"
+   regexp="n"
+   script="IncrementRound"
+   send_to="12"
+   sequence="100"
+   enabled="y"
+  >
+  </trigger>
+
+<!-- ========== DEATH TRIGGER (SHARED) ========== -->
+
+  <trigger
+   name="CombatDeathHandler"
+   group="Combat"
+   ignore_case="y"
+   match="* is DEAD, R.I.P."
+   send_to="12"
+   sequence="95"
+   script="OnCreatureDeath"
+   enabled="y"
+  >
+  </trigger>
+
+<!-- ========== CORPSE HANDLER TRIGGERS ========== -->
+
+  <trigger
+   name="TotemExistsFallback"
+   enabled="y"
+   match="There already is a vile totem here!"
+   script="FallbackToTin"
+   send_to="12"
+   sequence="95"
+  >
+  </trigger>
+
+</triggers>
+
+<!-- ==================== SCRIPT ==================== -->
+
+<script>
+<![CDATA[
+
+-- ==================== SHARED DATA ====================
+
+-- Flesh pieces to ignore (troll regeneration mobs) - SHARED BY BOTH SYSTEMS
+local flesh_pieces = {
+  ["Bit of flesh"] = true,
+  ["Mass of flesh"] = true,
+  ["Mound of flesh"] = true,
+  ["Severed limb"] = true,
+  ["Trollkin"] = true,
+  ["Wall of flesh"] = true
+}
+
+-- ==================== VULNERABILITY SYSTEM ====================
+
+-- Mapping of spell words to vulnerability types
+local spell_to_vuln = {
+  ["afflictus corpus"] = "Phys",
+  ["ardens amictus"] = "Fire",
+  ["aufero fervens"] = "Cold",
+  ["fulmen infractus"] = "Electric",
+  ["ignavus animus"] = "Psionic",
+  ["infirmus respiro"] = "Asphyx",
+  ["macilentus corium"] = "Acid",
+  ["macula valetudo"] = "Poison",
+  ["magus foramen"] = "Magic"
+}
+
+-- Table to store active timer names
+active_timers = active_timers or {}
+timer_counter = timer_counter or 0
+
+function StartVuln(name, line, wildcards)
+  -- Extract the spell words from the match
+  local spell = string.match(line, "You utter the magic words '([^']+)'")
+
+  if not spell then
+    return
+  end
+
+  local vuln_type = spell_to_vuln[spell]
+
+  if not vuln_type then
+    Note("Unknown vulnerability spell: " .. spell)
+    return
+  end
+
+  -- Cancel any existing timers for this vulnerability type
+  CancelVulnTimers(vuln_type)
+
+  -- Announce vulnerability is up
+  DoAfterSpecial(1, "Execute('party say " .. vuln_type .. " Vuln Up')", sendto.script)
+
+  -- Create a unique timer name
+  timer_counter = timer_counter + 1
+  local timer_name = "vuln_" .. vuln_type .. "_" .. timer_counter
+
+  -- Create the timer using AddTimer so we can delete it by name
+  AddTimer(
+    timer_name,                           -- timer name
+    0, 0, 27,                             -- hour, minute, second (27 seconds)
+    "AnnounceVulnDown('" .. vuln_type .. "', '" .. timer_name .. "')",  -- send text
+    timer_flag.Enabled + timer_flag.OneShot,  -- flags
+    ""                                    -- script name (empty for inline)
+  )
+
+  -- Set the timer to send to script
+  SetTimerOption(timer_name, "send_to", "12")
+
+  -- Store the timer name
+  if not active_timers[vuln_type] then
+    active_timers[vuln_type] = {}
+  end
+  table.insert(active_timers[vuln_type], timer_name)
+
+  Note("Started " .. vuln_type .. " vulnerability timer (" .. timer_name .. ")")
+end
+
+function AnnounceVulnDown(vuln_type, timer_name)
+  Execute("party say " .. vuln_type .. " Vuln Down")
+
+  -- Remove this timer from active timers
+  if active_timers[vuln_type] then
+    for i, name in ipairs(active_timers[vuln_type]) do
+      if name == timer_name then
+        table.remove(active_timers[vuln_type], i)
+        break
+      end
+    end
+  end
+end
+
+function CancelVulnTimers(vuln_type)
+  if active_timers[vuln_type] then
+    for _, timer_name in ipairs(active_timers[vuln_type]) do
+      local result = DeleteTimer(timer_name)
+      if result == error_code.eOK then
+        Note("Cancelled timer: " .. timer_name)
+      end
+    end
+    active_timers[vuln_type] = {}
+    Note("Cancelled all " .. vuln_type .. " vulnerability timers")
+  end
+end
+
+function CancelAllVulnTimers()
+  local count = 0
+  for vuln_type, timers in pairs(active_timers) do
+    for _, timer_name in ipairs(timers) do
+      local result = DeleteTimer(timer_name)
+      if result == error_code.eOK then
+        count = count + 1
+      end
+    end
+    active_timers[vuln_type] = {}
+  end
+  if count > 0 then
+    Note("Cancelled " .. count .. " active vulnerability timer(s)")
+  end
+end
+
+-- ==================== ROUND COUNTER SYSTEM ====================
+
+function IncrementRound(name, line, wildcards)
+  local current = tonumber(GetVariable("ro")) or 0
+  current = current + 1
+  SetVariable("ro", tostring(current))
+end
+
+-- ==================== CORPSE HANDLER SYSTEM ====================
+
+-- Default mode
+local default_mode = "tin"
+
+-- Flag to track if we're waiting for totem response
+waiting_for_totem = false
+
+-- Valid corpse handling modes
+local valid_modes = {
+  tin = true,
+  drain = true,
+  totem = true,
+  collect = true,
+  ranger = true,
+  troll = true,
+  archer = true,
+  off = true
+}
+
+-- Commands for each mode
+local mode_commands = {
+  tin = {
+    "put noeq in bag",
+    "tin corpse",
+    "get can",
+    "eat can"
+  },
+  drain = {
+    "put noeq in bag",
+    "sdrain corpse"
+  },
+  totem = {
+    "put noeq in bag",
+    "use vile totem at corpse"
+  },
+  collect = {
+    "put noeq in bag",
+    "get corpse",
+    "put corpse in carriage"
+  },
+  ranger = {
+    "say eat all",
+    "give noeq to kevin"
+  },
+  troll = {
+    "give all shuriken to kuolema",
+    "give noeq to kevin",
+    "get corpse"
+  },
+  archer = {
+    "put noeq in bag",
+    "tin corpse",
+    "get can",
+    "eat can",
+    "put all in quiver"  -- Archer-specific: store arrows/bolts
+  },
+  off = {}  -- No commands
+}
+
+function SetCorpseMode(name, line, wildcards)
+  local mode = wildcards[1]:lower()
+
+  -- Trim whitespace
+  mode = mode:match("^%s*(.-)%s*$")
+
+  if not valid_modes[mode] then
+    Note("Invalid corpse mode. Valid modes are: tin, drain, totem, collect, ranger, troll, archer, off")
+    Note("Current mode: " .. GetCurrentMode())
+    return
+  end
+
+  SetVariable("corpse_mode", mode)
+  ColourNote("yellow", "", "Corpse handling mode set to: " .. mode)
+
+  -- Show what commands will be executed
+  if mode ~= "off" then
+    ColourNote("cyan", "", "Commands on death:")
+    for _, cmd in ipairs(mode_commands[mode]) do
+      ColourNote("cyan", "", "  - " .. cmd)
+    end
+    if mode == "totem" then
+      ColourNote("cyan", "", "  (Falls back to tinning if totem already exists)")
+    end
+  else
+    ColourNote("cyan", "", "Corpse handling disabled")
+  end
+end
+
+function GetCurrentMode()
+  local mode = GetVariable("corpse_mode")
+  if not mode or not valid_modes[mode] then
+    mode = default_mode
+    SetVariable("corpse_mode", mode)
+  end
+  return mode
+end
+
+function HandleCorpse()
+  local mode = GetCurrentMode()
+
+  if mode == "off" then
+    return
+  end
+
+  local commands = mode_commands[mode]
+  if not commands then
+    Note("Error: Unknown corpse mode '" .. mode .. "'")
+    return
+  end
+
+  -- Set flag if we're using totem mode
+  if mode == "totem" then
+    waiting_for_totem = true
+    -- Clear the flag after 2 seconds if we don't get the message
+    DoAfterSpecial(2, "waiting_for_totem = false", sendto.script)
+  end
+
+  -- Execute all commands immediately
+  for _, cmd in ipairs(commands) do
+    Send(cmd)
+  end
+end
+
+function FallbackToTin(name, line, wildcards)
+  -- Only act if we were trying to place a totem
+  if not waiting_for_totem then
+    return
+  end
+
+  waiting_for_totem = false
+
+  ColourNote("orange", "", "Totem already exists - falling back to tinning")
+
+  -- Execute tin commands immediately
+  Send("tin corpse")
+  Send("get can")
+  Send("eat can")
+end
+
+-- ==================== SHARED DEATH HANDLER ====================
+
+function OnCreatureDeath(name, line, wildcards)
+  -- Extract the mob name from the death message
+  local mob_name = wildcards[1]
+
+  -- Ignore flesh pieces (troll regeneration mobs)
+  if flesh_pieces[mob_name] then
+    return
+  end
+
+  -- ===== ROUND COUNTER LOGIC =====
+  local rounds = tonumber(GetVariable("ro")) or 0
+
+  -- Display round counter
+  if rounds > 0 then
+    Note("This combat was a total of " .. rounds .. " rounds")
+  end
+
+  -- Reset round counter
+  SetVariable("ro", "0")
+  Note("Round counter reset to zero")
+
+  -- ===== VULNERABILITY TIMER LOGIC =====
+  -- Cancel all vulnerability timers on death
+  CancelAllVulnTimers()
+
+  -- ===== CORPSE HANDLER LOGIC =====
+  -- Handle the corpse based on current mode
+  HandleCorpse()
+end
+
+-- ==================== PLUGIN EVENTS ====================
+
+function OnPluginInstall()
+  -- Initialize round counter
+  if GetVariable("ro") == nil then
+    SetVariable("ro", "0")
+  end
+
+  ColourNote("green", "", "Combat Manager v1.1 loaded")
+  ColourNote("cyan", "", "  - Vulnerability timer tracking (9 types)")
+  ColourNote("cyan", "", "  - Round counter")
+  ColourNote("cyan", "", "  - Corpse handling (" .. GetCurrentMode() .. " mode)")
+  ColourNote("yellow", "", "Use 'corpsemode [mode]' to change corpse handling")
+  ColourNote("yellow", "", "Modes: tin, drain, totem, collect, ranger, troll, archer, off")
+end
+
+function OnPluginSaveState()
+  -- Save the round counter
+  SetVariable("ro", tostring(GetVariable("ro") or "0"))
+end
+
+]]>
+</script>
+
+</muclient>
