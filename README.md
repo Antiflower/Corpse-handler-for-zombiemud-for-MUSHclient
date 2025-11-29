@@ -1,4 +1,4 @@
-# Corpse-handler-for-zombiemud-for-MUSHclient
+# Combat Handler + Buff tracker
 This contains a corpse handler plugin for use in zombiemud via MUSHclient. Plugin created with the help of Claude AI
 
 Download the plugin
