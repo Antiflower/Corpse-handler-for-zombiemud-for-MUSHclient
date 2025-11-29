@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE muclient>
+
+<!-- Combined plugin merging Tells_window.xml + Channels_window.xml -->
+
+<muclient>
+<plugin
+   name="Message_Router"
+   author="Nick Gammon (merged by Claude)"
+   id="cb84a526b476f69f403519da"
+   language="Lua"
+   purpose="Routes tells and channels to separate world windows with logging"
+   date_written="2025-11-28"
+   requires="4.08"
+   version="2.0"
+   >
+<description trim="y">
+<![CDATA[
+Combined message router for ZombieMUD.
+
+Redirects different message types to separate world windows:
+- Tells → tells.mcl window
+- Channels → channels.mcl window
+
+Features:
+- Automatic logging to ZombieMush/Logs/ directory
+- Supports all bracket types: [], {}, <>
+- Separate active/last log files
+- Optional bell sound on incoming tells
+- Timezone-aware logging
+
+Configuration:
+- tells_world: World file name for tells (default: "tells")
+- channels_world: World file name for channels (default: "channels")
+- bell_on_tell: Play sound on incoming tell (default: 0 = off)
+- log_messages: Enable/disable logging (default: 1 = on)
+]]>
+</description>
+
+</plugin>
+
+<!--  Triggers  -->
+
+<triggers>
+
+<!-- ==================== CHANNEL TRIGGERS ==================== -->
+
+<!-- Channel messages - all bracket types: [channel], {channel}, <channel> -->
+<trigger
+  enabled="y"
+  match="^(?:\[|\{|\<)(\w+)(?:\]|\}|\>): .*$"
+  regexp="y"
+  omit_from_output="y"
+  sequence="100"
+  script="route_channel"
+></trigger>
+
+<!-- Channel messages with player name prefix -->
+<trigger
+  enabled="y"
+  match="^[a-zA-Z ()]+ (?:\[|\{|\<)(\w+)(?:\]|\}|\>): .*$"
+  regexp="y"
+  omit_from_output="y"
+  sequence="100"
+  script="route_channel"
+></trigger>
+
+<!-- Channel messages with timestamp (last logs) -->
+<trigger
+  enabled="y"
+  match="^\w*\s*\d*\s*\d+:\d+ (?:\w*|\w+ \w+ \w+|\w+ \(\w+\))\s*(?:\[|\{|\<)(\w+)(?:\]|\}|\>): .*$"
+  regexp="y"
+  omit_from_output="y"
+  sequence="100"
+  script="last_route_channel"
+></trigger>
+
+<!-- ==================== TELL TRIGGERS ==================== -->
+
+<!-- Incoming tells - active -->
+<trigger
+  enabled="y"
+  match="^[a-zA-Z]+.+tells you (?:and .+? )*'.+?'"
+  script="route_tell_incoming"
+  regexp="y"
+  omit_from_output="y"
+  sequence="100"
+></trigger>
+
+<!-- Incoming tells - last logs with timestamp -->
+<trigger
+  enabled="y"
+  match="^\w*\s*\d*\s*\d+:\d+.+ tells you.+'.+'$"
+  script="last_route_tell"
+  regexp="y"
+  omit_from_output="y"
+  sequence="90"
+></trigger>
+
+<!-- Outgoing tells -->
+<trigger
+  enabled="y"
+  match="^You tell \w+ .*?'.+?'"
+  script="route_tell_outgoing"
+  regexp="y"
+  omit_from_output="y"
+  sequence="100"
+></trigger>
+
+<!-- Outgoing tells - last logs with timestamp -->
+<trigger
+  enabled="y"
+  match="^\w*\s*\d*\s*\d+:\d+.+ You tell.+'.+'$"
+  script="last_route_tell"
+  regexp="y"
+  omit_from_output="y"
+  sequence="100"
+></trigger>
+
+</triggers>
+
+<!--  Script  -->
+
+<script>
+<![CDATA[
+
+-- ==================== CONFIGURATION ====================
+
+-- World file names (without .mcl extension)
+tells_world = "tells"
+channels_world = "channels"
+
+-- Play bell sound on incoming tell (0 = off, 1 = on)
+bell_on_tell = 0
+
+-- Enable logging (0 = off, 1 = on)
+log_messages = 1
+
+-- Logs directory relative to MUSHclient install
+log_directory = "ZombieMush\\Logs\\"
+
+-- Time zone offset from zombiemud server in seconds
+zombie_time_zone_offset = 21600
+
+-- ==================== INITIALIZATION ====================
+
+-- Prepend with full directory structure
+log_directory = GetInfo(57) .. log_directory
+
+if log_messages == 1 then
+  -- Create the log directory
+  os.execute('mkdir "' .. log_directory .. '"')
+  -- Turn \ into / for lua file reading
+  log_directory = log_directory:gsub("\\", "/")
+  log_directory = log_directory .. os.date("%y_%b_")
+end
+
+local first_time_tells = true
+local first_time_channels = true
+
+-- ==================== ROUTING FUNCTIONS ====================
+
+function route_channel(name, line, wildcards, styles)
+  line = os.date("%c ") .. line
+
+  -- Try to find "channels" world
+  local w = GetWorld(channels_world)
+
+  -- If not found, try to open it
+  if first_time_channels and not w then
+    local filename = GetInfo(67) .. channels_world .. ".mcl"
+    Open(filename)
+    w = GetWorld(channels_world)
+    if not w then
+      ColourNote("white", "red", "Can't open channels world file: " .. filename)
+      first_time_channels = false
+    end
+  end
+
+  if w then
+    -- Log the channel message
+    if log_messages == 1 then
+      local channel_name = wildcards[1]
+      local f = io.open(log_directory .. "active_" .. channel_name .. ".txt", "a")
+      if f then
+        f:write(line .. "\n")
+        f:close()
+      end
+    end
+
+    -- Send to channels window
+    for _, v in ipairs(styles) do
+      w:ColourTell(RGBColourToName(v.textcolour),
+                   RGBColourToName(v.backcolour),
+                   v.text)
+    end
+    w:Note("")
+  end
+end
+
+function last_route_channel(name, line, wildcards, styles)
+  -- Try to find "channels" world
+  local w = GetWorld(channels_world)
+
+  -- If not found, try to open it
+  if first_time_channels and not w then
+    local filename = GetInfo(67) .. channels_world .. ".mcl"
+    Open(filename)
+    w = GetWorld(channels_world)
+    if not w then
+      ColourNote("white", "red", "Can't open channels world file: " .. filename)
+      first_time_channels = false
+    end
+  end
+
+  if w then
+    -- Log to last log with deduplication
+    if log_messages == 1 then
+      local channel_name = wildcards[1]
+      local last_log_file = log_directory .. "last_" .. channel_name .. ".txt"
+
+      local a = io.open(last_log_file, "a")
+      local f = io.input(last_log_file)
+      local all = f:read("*a")
+      f:close()
+
+      -- Add timestamp if needed
+      local line_to_write
+      if not line:find("^%w+%s%d+%s.*$") then
+        local now = os.time()
+        line_to_write = os.date("%b %d", now + zombie_time_zone_offset) .. " " .. line
+      else
+        line_to_write = line
+      end
+
+      -- Deduplicate: only write if not already in file
+      if all == nil then
+        a:write(line_to_write .. "\n")
+      elseif not all:find(line_to_write, 0, true) then
+        a:write(line_to_write .. "\n")
+      end
+      a:close()
+    end
+
+    -- Send to channels window
+    for _, v in ipairs(styles) do
+      w:ColourTell(RGBColourToName(v.textcolour),
+                   RGBColourToName(v.backcolour),
+                   v.text)
+    end
+    w:Note("")
+  end
+end
+
+function route_tell_incoming(name, line, wildcards, styles)
+  line = os.date("%c ") .. line
+
+  -- Play bell if configured
+  if bell_on_tell == 1 then
+    Sound("ding.wav")
+  end
+
+  -- Try to find "tells" world
+  local w = GetWorld(tells_world)
+
+  -- If not found, try to open it
+  if first_time_tells and not w then
+    local filename = GetInfo(67) .. tells_world .. ".mcl"
+    Open(filename)
+    w = GetWorld(tells_world)
+    if not w then
+      ColourNote("white", "red", "Can't open tells world file: " .. filename)
+      first_time_tells = false
+    end
+  end
+
+  if w then
+    -- Log the tell
+    if log_messages == 1 then
+      local f = io.open(log_directory .. "active_tells.txt", "a")
+      if f then
+        f:write(line .. "\n")
+        f:close()
+      end
+    end
+
+    -- Send to tells window
+    for _, v in ipairs(styles) do
+      w:ColourTell(RGBColourToName(v.textcolour),
+                   RGBColourToName(v.backcolour),
+                   v.text)
+    end
+    w:Note("")
+  end
+end
+
+function route_tell_outgoing(name, line, wildcards, styles)
+  line = os.date("%c ") .. line
+
+  -- Try to find "tells" world
+  local w = GetWorld(tells_world)
+
+  -- If not found, try to open it
+  if first_time_tells and not w then
+    local filename = GetInfo(67) .. tells_world .. ".mcl"
+    Open(filename)
+    w = GetWorld(tells_world)
+    if not w then
+      ColourNote("white", "red", "Can't open tells world file: " .. filename)
+      first_time_tells = false
+    end
+  end
+
+  if w then
+    -- Log the tell
+    if log_messages == 1 then
+      local f = io.open(log_directory .. "active_tells.txt", "a")
+      if f then
+        f:write(line .. "\n")
+        f:close()
+      end
+    end
+
+    -- Send to tells window
+    for _, v in ipairs(styles) do
+      w:ColourTell(RGBColourToName(v.textcolour),
+                   RGBColourToName(v.backcolour),
+                   v.text)
+    end
+    w:Note("")
+  end
+end
+
+function last_route_tell(name, line, wildcards, styles)
+  -- Try to find "tells" world
+  local w = GetWorld(tells_world)
+
+  -- If not found, try to open it
+  if first_time_tells and not w then
+    local filename = GetInfo(67) .. tells_world .. ".mcl"
+    Open(filename)
+    w = GetWorld(tells_world)
+    if not w then
+      ColourNote("white", "red", "Can't open tells world file: " .. filename)
+      first_time_tells = false
+    end
+  end
+
+  if w then
+    -- Log to last log with deduplication
+    if log_messages == 1 then
+      local last_log_file = log_directory .. "last_tells.txt"
+
+      local a = io.open(last_log_file, "a")
+      local f = io.input(last_log_file)
+      local all = f:read("*a")
+      f:close()
+
+      -- Add timestamp if needed
+      local line_to_write
+      if not line:find("^%w+%s%d+%s.*$") then
+        local now = os.time()
+        line_to_write = os.date("%b %d", now + zombie_time_zone_offset) .. " " .. line
+      else
+        line_to_write = line
+      end
+
+      -- Deduplicate: only write if not already in file
+      if all == nil then
+        a:write(line_to_write .. "\n")
+      elseif not all:find(line_to_write, 0, true) then
+        a:write(line_to_write .. "\n")
+      end
+      a:close()
+    end
+
+    -- Send to tells window
+    for _, v in ipairs(styles) do
+      w:ColourTell(RGBColourToName(v.textcolour),
+                   RGBColourToName(v.backcolour),
+                   v.text)
+    end
+    w:Note("")
+  end
+end
+
+-- ==================== PLUGIN EVENTS ====================
+
+function OnPluginInstall()
+  ColourNote("cyan", "", "Message Router v2.0 loaded")
+  ColourNote("cyan", "", "Routing tells → " .. tells_world .. ".mcl")
+  ColourNote("cyan", "", "Routing channels → " .. channels_world .. ".mcl")
+
+  if log_messages == 1 then
+    ColourNote("green", "", "Logging enabled: " .. log_directory)
+  else
+    ColourNote("yellow", "", "Logging disabled")
+  end
+
+  if bell_on_tell == 1 then
+    ColourNote("green", "", "Bell sound on incoming tells: ENABLED")
+  end
+end
+
+]]>
+</script>
+
+</muclient>

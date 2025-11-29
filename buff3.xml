@@ -1,0 +1,726 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE muclient>
+
+<muclient>
+<plugin
+name="ZombieMUD_BuffTracker_Enhanced"
+author="Enhanced by Claude"
+id="5436f54b51d710e47030a41e"
+language="Lua"
+purpose="Track buffs with uptime and announce to party"
+save_state="y"
+requires="4.00"
+version="2.5"
+>
+
+<description trim="y"><![CDATA[
+Enhanced buff tracker for ZombieMUD with uptime tracking.
+
+- Alias: buffs (prints current buff stacks with uptime to party channel)
+- Tracks individual buff uptime
+- Announces total uptime when buff expires
+- Omits stack info for single-stack buffs
+- Expanded buff list from effects.tf
+- Berserk ignore counter: Announces total ignored attacks to party on creature death
+- Calm alias: Manually end berserk with ignore count announcement
+]]></description>
+</plugin>
+
+<!-- Aliases -->
+<aliases>
+<alias
+match="buffs"
+script="OnBuffStatus"
+enabled="y"
+regexp="n"
+/>
+
+<alias
+match="calm"
+script="OnCalm"
+enabled="y"
+regexp="n"
+/>
+</aliases>
+
+<!-- Triggers -->
+<triggers>
+  <!-- Berserk ignore counter triggers -->
+  <trigger
+   enabled="y"
+   group="Berserk"
+   ignore_case="y"
+   match="A seering pain shoots through your body, but you ignore it."
+   send_to="12"
+   sequence="100"
+   script="OnBerserkIgnore"
+  >
+  </trigger>
+
+  <trigger
+   enabled="y"
+   group="Berserk"
+   match="You feel the red mist fading away."
+   send_to="12"
+   sequence="100"
+   script="OnBerserkFading"
+  >
+  </trigger>
+
+  <!-- Death trigger for berserk ignore announcement -->
+  <trigger
+   enabled="y"
+   group="Berserk"
+   ignore_case="y"
+   match="* is DEAD, R.I.P."
+   send_to="12"
+   sequence="98"
+   script="OnDeathBerserkAnnounce"
+  >
+  </trigger>
+</triggers>
+
+<!-- Script -->
+<script>
+<![CDATA[
+buffDetails = {
+    -- Original buffs
+    ["stoneskin"] = {
+        ["maxStacks"] = 2,
+        ["apply"] = "Granite plates form over your skin.",
+        ["fade"] = "Your stoneskin crumbles and drops off.",
+    },
+    ["SOP"] = {
+        ["maxStacks"] = 2,
+        ["apply"] = "You form a barrier of repulsive magic around yourself.",
+        ["fade"] = "Your protection spell wears off.",
+    },
+    ["Disp"] = {
+        ["maxStacks"] = 2,
+        ["apply"] = "You displace .+'s image.",
+        ["apply_alt"] = "displaces your image.",
+        ["fade"] = "Your displacement wears off.",
+        ["regex"] = true,
+    },
+    ["Sspirit"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You open your eyes with new?found confidence.",
+        ["fade"] = "The teachings of your ancestors fade from your mind as the aches and",
+        ["regex"] = true,
+    },
+    ["Smwalk"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You start walking magically.",
+        ["fade"] = "Your magical walking wears off.",
+    },
+    ["Lion Heart"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Your heart is that of a Lion!",
+        ["fade"] = "The Courage of the Lion leaves you.",
+    },
+    ["MUP"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel more sturdy.",
+        ["fade"] = "You feel a little like crap.",
+    },
+    ["Regen"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel your metabolism speed up.",
+        ["fade"] = "Your metabolism slows back down.",
+    },
+    ["AOG"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "A shining .+ of glowing silver .+ surrounds you%.",
+        ["fade"] = "The Armour of God surrounding you fades away.",
+        ["regex"] = true,
+    },
+    ["Brill"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel enlightened as your innate brilliance awakens.",
+        ["fade"] = "You feel your innate brilliance diminish.",
+    },
+    ["EoM"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Your eyes flash in silky colours.",
+        ["fade"] = "You feel a pinch in your eyes.",
+    },
+    ["IP"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel inner .+ increasing.",
+        ["fade"] = "You feel your inner power decreasing.",
+        ["regex"] = true,
+    },
+    ["SR"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Kyte wobbles around a bit.",
+        ["fade"] = "Your stun resistance wears off.",
+        ["regex"] = true,
+    },
+    ["HBarrier"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel enveloped in harmony.",
+        ["fade"] = "You are no longer enveloped in harmony.",
+    },
+    ["Hprep"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel like you might be ready for harmony.",
+        ["fade"] = "You feel less prepared for harmony.",
+    },
+    ["Harmour"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel in complete harmony.",
+        ["fade"] = "You no longer feel harmonious.",
+    },
+    ["Mbarrier"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel as if a protective barrier surrounds your fragile mind.",
+        ["fade"] = "You feel a slight tingle somewhere deep inside your mind.",
+    },
+    ["TUP"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel like you could carry the world.",
+        ["fade"] = "You feel like crap.",
+    },
+    ["BUP"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Your brain feels bigger.",
+        ["fade"] = "Your brain feels smaller.",
+    },
+    ["CFT"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Suddenly your body flashes bright white inviting the lightning to strike at your knuckles.",
+        ["fade"] = "Your body doesnt seem to sizzle anymore",
+    },
+    ["CFF"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Suddenly bright flames burst out from your toes and flash over your body ending up into your knuckles.",
+        ["fade"] = "The flames around you grow weaker and disappear",
+    },
+    ["CFI"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Suddenly your eyes freeze into two clear blocks of ice for a moment before they slide away down your arms into your knuckles.",
+        ["fade"] = "You feel your body temperature rise back as ice melts",
+    },
+    ["ADREN"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You are bursting with energy!!!",
+        ["fade"] = "Exhaustion washes over you as the adrenaline begins to leave your bloodstream%.%.",
+        ["regex"] = true,
+    },
+    ["CT"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Your movements are now more focused and your mind is calm.",
+        ["fade"] = "You lose your concentration and fight with less precision.",
+    },
+    ["EH"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "With a flash a shining hauberk of pure energy encases you%.",
+        ["fade"] = "The energy surrounding your body dwindles away.",
+        ["regex"] = true,
+    },
+    ["Blur"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You enchant the air around you, blurring your outlines.",
+        ["fade"] = "Your blur wears off.",
+    },
+    ["Amorphic"] = {
+        ["maxStacks"] = 2,
+        ["apply"] = ".+ casts a protective spell on .+%.",
+        ["fade"] = "Your Amorphic Armour spell wears off.",
+        ["regex"] = true,
+    },
+    -- Additional buffs from effects.tf
+    ["IronWill"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = ".+ stares? deep into your eyes, bolstering your concentration greatly%.",
+		["apply_alt"] = "You turn your mind inwards, enchanting yourself with an aura of rigid concentration.",
+        ["fade"] = "Your Iron Will wears off.",
+        ["regex"] = true,
+    },
+    ["ForceShield"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = ".+ surrounds you with a telekinetic shield of force%.",
+        ["fade"] = "The force shield dissipates.",
+        ["regex"] = true,
+    },
+    ["GACID"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You clench your fist and manipulate the air around you.",
+        ["apply_alt"] = "substance that irritates your skin.",
+        ["fade"] = "The tickling adhesive fluid on your skin disappears.",
+        ["regex"] = true,
+    },
+	["LACID"] = {
+		["maxStacks"] = 1,
+		["apply"] = "turning the water into a neutralizing adhesive fluid",
+		["apply_alt"] = "adhesive fluid that tickles your skin.",
+		["fade"] = "The neutralizing adhesive fluid on your skin disappears.",
+		["regex"] = false,
+	},
+    ["GASPHYX"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You inhale hard and a gust of wind blows against your face, ",
+        ["apply_alt"] = "the magic is absorbed into your body.",
+        ["fade"] = "You gasp for air as a choking feeling passes over you.",
+        ["regex"] = true,
+    },
+    ["LASPHYX"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You breathe in and a light breeze brushes against your",
+        ["apply_alt"] = "magic is absorbed into your body.",
+        ["fade"] = "You have trouble breathing for a moment.",
+        ["regex"] = true,
+    },
+    ["GCOLD"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "A beam of torrid energy lashes out from your outstretched hand,",
+        ["fade"] = "A great chill washes over you as the magical warmth leaves you.",
+        ["regex"] = true,
+    },
+    ["LCOLD"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "A ray of fiery energy launches from your outstretched hand,",
+        ["fade"] = "You feel cold and exposed as the magical warmth leaves you.",
+        ["regex"] = true,
+    },
+    ["GELEC"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "With a strong pulling motion of your outstreched hands an",
+        ["apply_alt"] = "making you spasm as it settles into your body.",
+        ["fade"] = "The world flashes around you and with a quick spasm the magic in your body disappears.",
+        ["regex"] = true,
+    },
+    ["LELEC"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "With a withdrawing motion of your outstreched hands a",
+        ["apply_alt"] = "energy leaps at you. The magic penetrates your chest, and",
+        ["fade"] = "Your surroundings flash and with a shiver the magic in your body disappears.",
+        ["regex"] = true,
+    },
+    ["GFIRE"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You draw a circle in the air and a brilliant halo of cold blue",
+        ["fade"] = "The freezing grip of winter disappears and you feel comfortably warm again.",
+        ["regex"] = true,
+    },
+    ["LFIRE"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You trace a circle in the air and a shining circumference of blue",
+        ["apply_alt"] = "you feel a chill climbing up your spine.",
+        ["fade"] = "The chill in your bones is gone and you feel comfortably warm again.",
+        ["regex"] = true,
+    },
+    ["GMAGIC"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You point your index finger forward, and an effulgent",
+        ["fade"] = "The swirling shell of effulgent magic around you vanishes.",
+        ["regex"] = true,
+    },
+    ["LMAGIC"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "of mystic light is unleashed. The magic swirls around you,",
+        ["apply_alt"] = "you, spiralling up and down, like a whirlwind of stardust.",
+        ["fade"] = "The whirlwind of protective magic around you vanishes.",
+        ["regex"] = true,
+    },
+    ["GPOISON"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Envisaging the arteries, you inject yourself with an arcane.",
+        ["apply_alt"] = "an otherworldly fervor rushing through your veins.",
+        ["fade"] = "The blazing fervor in your veins is gone.",
+        ["regex"] = true,
+    },
+    ["LPOISON"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Envisaging the arteries, you inject yourself with a mystic",
+        ["apply_alt"] = "feel an unnatural warmth coursing through your veins.",
+        ["fade"] = "The warmth in your veins is gone.",
+        ["regex"] = true,
+    },
+    ["GPSI"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You place your hand on your forehead and a soothing barrier forms.",
+        ["apply_alt"] = "form around your soul.",
+        ["fade"] = "The soothing void around your soul is no more.",
+        ["regex"] = true,
+    },
+    ["LPSI"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You tap yourself lightly on the forehead and a relaxing shelter",
+        ["apply_alt"] = "emptiness settle in your mind.",
+        ["fade"] = "The relaxing emptiness in your mind is no more.",
+        ["regex"] = true,
+    },
+    ["GPHYS"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = ".+ regards you with a focused look in its eyes and the air around",
+        ["apply_alt"] = "The air around you starts to waver vigorously.",
+        ["fade"] = "The air around you is calm once more as the wavering stops.",
+        ["regex"] = true,
+    },
+    ["LPHYS"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "magic around you. The air around you starts to ripple.",
+        ["apply_alt"] = ".+ eyes you attentively and the air around you starts to ripple",
+        ["fade"] = "The air around you is calm once more as the rippling stops.",
+        ["regex"] = true,
+    },
+	["Lsphere"] = {
+		["maxStacks"] = 1,
+		["apply"] = "A faint shimmering sphere of .+ protection envelops you",
+		["fade"] = "Your lesser protective sphere against .+ damage vanishes.",
+		["regex"] = true,
+	},
+	["Gsphere"] = {
+		["maxStacks"] = 1,
+		["apply"] = "A shimmering sphere of .+ protection envelops you",
+		["fade"] = "Your greater protective sphere against .+ damage vanishes.",
+		["regex"] = true,
+	},
+    ["LPHYS"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "magic around you. The air around you starts to ripple.",
+        ["fade"] = "The air around you is calm once more as the rippling stops.",
+        ["regex"] = true,
+    },
+    ["EWARD"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You hear harsh whispering, only barely audible, as a dim glow starts to manifest around you.",
+        ["fade"] = "The ghostly aura of green fire enveloping you diminishes quickly to vanish",
+        ["regex"] = true,
+    },
+    ["SARMOUR"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel weightless as a strange sensation of non-corporeality descends upon you. Looking down you",
+        ["fade"] = "The eerie sensation of non-corporeality subsides.",
+        ["regex"] = true,
+    },
+    ["Berserk"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You bellow in rage and you must kill!",
+        ["fade"] = "You come out of your berserk!",
+    },
+    ["Infra"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel like you can see in the dark.",
+        ["fade"] = "Your vision is a bit less red.",
+    },
+    ["WolfEyes"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Your eyes gleam yellow and your night vision improves.",
+        ["fade"] = "Your yellow wolf eyes turn back to normal.",
+    },
+    ["Light"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You summon a magical ball of light.",
+        ["fade"] = "The light spell wears off.",
+    },
+    ["HSmoke"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You breathe out a billowy cloud of harmonious smoke.",
+        ["fade"] = "Your healing smoke disperses.",
+    },
+    ["WallSteel"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You lift up your shield.",
+        ["fade"] = "Your hand starts to ache, forcing you to lower your shield.",
+    },
+    ["Barkskin"] = {
+        ["maxStacks"] = 2,
+        ["apply"] = "Your skin turns green and fissures, thickening into a layer of tough bark.",
+        ["fade"] = "Your barkskin wears off.",
+    },
+    ["WaterBreath"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = ".+ puts? a protective blue aura around your head%.",
+        ["fade"] = "You are no longer able to breathe underwater.",
+        ["regex"] = true,
+    },
+    ["WaterWalk"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = ".+ looks a bit different%.",
+        ["fade"] = "You feel heavy.",
+        ["regex"] = true,
+    },
+    ["Invis"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You turn invisible[%.!]",
+        ["fade"] = "You turn visible again.",
+        ["regex"] = true,
+    },
+    ["Transform"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You shriek in pain as your entire body begins to transform!",
+        ["fade"] = "With a violent convulsion, you return to your normal form.",
+    },
+    ["Blind"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = ".+ blinds you%.",
+        ["fade"] = "You are able to see again.",
+        ["regex"] = true,
+    },
+    ["Slow"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel like lagged.",
+        ["fade"] = "You no longer feel lagged.",
+    },
+    ["Glue"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Your feet are covered with slimy matter.",
+        ["fade"] = "You can move again.",
+    },
+    ["SeeMagic"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Your vision seems more sensitive.",
+        ["fade"] = "Your vision feels less sensitive.",
+    },
+    ["ShadowShield"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = ".+ draws? a protective circle in the air .+ shadows",
+        ["fade"] = "The shadows lift from your body.",
+        ["regex"] = true,
+    },
+    ["Kamikaze"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You start your Kamikaze attack!",
+        ["fade"] = "You calm down.",
+    },
+    ["Forget"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel stoopid.",
+        ["fade"] = "For some reason or another%.%. you feel smarter.",
+        ["regex"] = true,
+    },
+    ["MindDev"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel smart.",
+        ["fade"] = "You feel stupid.",
+    },
+    ["Enlighten"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel wiser.",
+        ["fade"] = "You feel less wise.",
+    },
+    ["HolyWisdom"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel wiser as holy wisdom expands your mind.",
+        ["fade"] = "You feel the wisdom leaving you.",
+    },
+    ["MindLink"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You think that you're not alone in your head.",
+        ["fade"] = "You feel alone in your head again.",
+    },
+    ["ResistHeal"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel weird.",
+        ["fade"] = "You feel normal again.",
+    },
+    ["SpiritNature"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You feel .+ as .+ as the spirit of the .+ strenghtens you!",
+        ["fade"] = "You suddenly feel cold as the presence leaves your body.",
+        ["regex"] = true,
+    },
+    ["ViscousFlesh"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "You concentrate on your body, and its composition is revealed to your",
+        ["fade"] = "The viscous black substance is absorbed by your skin, and so it disappears.",
+    },
+    ["DragonSight"] = {
+        ["maxStacks"] = 1,
+        ["apply"] = "Kyte's eyes glow a burning crimson.",
+        ["fade"] = "Your eyes revert to their usual mammalian state.",
+        ["regex"] = true,
+    },
+}
+
+-- Track buff stacks and uptime
+buffStacks = {}
+buffStartTime = {}
+
+-- Berserk ignore counter
+berserk_ignores = 0
+
+-- Flesh pieces to ignore (troll regeneration mobs)
+local flesh_pieces = {
+  ["Bit of flesh"] = true,
+  ["Mass of flesh"] = true,
+  ["Mound of flesh"] = true,
+  ["Severed limb"] = true,
+  ["Trollkin"] = true,
+  ["Wall of flesh"] = true
+}
+
+
+function FormatUptime(seconds)
+    if seconds < 60 then
+        return string.format("%ds", seconds)
+    elseif seconds < 3600 then
+        local mins = math.floor(seconds / 60)
+        local secs = seconds % 60
+        return string.format("%dm%ds", mins, secs)
+    else
+        local hours = math.floor(seconds / 3600)
+        local mins = math.floor((seconds % 3600) / 60)
+        return string.format("%dh%dm", hours, mins)
+    end
+end
+
+function OnPluginInstall()
+    Send("party say Enhanced BuffTracker v2.5 loaded - flesh pieces ignored!")
+    for name, buff in pairs(buffDetails) do
+        buffStacks[name] = 0
+        buffStartTime[name] = {}
+        
+        local triggerFlags = trigger_flag.Enabled + trigger_flag.RegularExpression * (buff["regex"] and 1 or 0)
+        
+        -- Primary application trigger
+        AddTriggerEx(
+            "gain_" .. name:gsub("[^A-Za-z0-9_]", ""):sub(1, 30),
+            buff["apply"],
+            "OnBuffGain('" .. name .. "')",
+            triggerFlags,
+            -1, 0, "", "", sendto.script, 100
+        )
+        
+        -- Alternate application trigger (for self-cast variations)
+        if buff["apply_alt"] then
+            AddTriggerEx(
+                "gain_alt_" .. name:gsub("[^A-Za-z0-9_]", ""):sub(1, 27),
+                buff["apply_alt"],
+                "OnBuffGain('" .. name .. "')",
+                triggerFlags,
+                -1, 0, "", "", sendto.script, 100
+            )
+        end
+        
+        -- Fade trigger
+        AddTriggerEx(
+            "loss_" .. name:gsub("[^A-Za-z0-9_]", ""):sub(1, 30),
+            buff["fade"],
+            "OnBuffLoss('" .. name .. "')",
+            triggerFlags,
+            -1, 0, "", "", sendto.script, 100
+        )
+    end
+end
+
+function OnBuffGain(name)
+    local maxStacks = buffDetails[name]["maxStacks"]
+    
+    if buffStacks[name] < maxStacks then
+        buffStacks[name] = buffStacks[name] + 1
+        table.insert(buffStartTime[name], os.time())
+        
+        -- Only show stack info for multi-stack buffs
+        if maxStacks > 1 then
+            Send("party say " .. name .. " up! Current stacks: " .. buffStacks[name])
+        else
+            Send("party say " .. name .. " up!")
+        end
+    else
+        -- Only announce max stacks for multi-stack buffs
+        if maxStacks > 1 then
+            Send("party say " .. name .. " is at max stacks: " .. maxStacks)
+        end
+    end
+end
+
+function OnBuffLoss(name)
+    local maxStacks = buffDetails[name]["maxStacks"]
+
+    if buffStacks[name] and buffStacks[name] > 0 then
+        local startTime = table.remove(buffStartTime[name], 1)
+        local uptime = os.time() - startTime
+        buffStacks[name] = buffStacks[name] - 1
+
+        -- Special handling for Berserk - reset ignore counter when berserk ends
+        if name == "Berserk" then
+            if berserk_ignores > 0 then
+                Note("Berserk ended. Total ignores this session: " .. berserk_ignores)
+            end
+            berserk_ignores = 0
+        end
+
+        -- Only show stack info for multi-stack buffs
+        if maxStacks > 1 then
+            Send("party say " .. name .. " lost. Stacks: " .. buffStacks[name] .. " | Was up: " .. FormatUptime(uptime))
+        else
+            Send("party say " .. name .. " lost. Was up: " .. FormatUptime(uptime))
+        end
+    else
+        Send("party say " .. name .. " is not active.")
+    end
+end
+
+function OnBuffStatus()
+    local activeBuffs = {}
+    for name, stacks in pairs(buffStacks) do
+        if stacks > 0 then
+            local maxStacks = buffDetails[name]["maxStacks"]
+            local uptimeStr = ""
+            if buffStartTime[name] and #buffStartTime[name] > 0 then
+                local currentUptime = os.time() - buffStartTime[name][1]
+                uptimeStr = "(" .. FormatUptime(currentUptime) .. ")"
+            end
+
+            -- Only show stack info for multi-stack buffs
+            if maxStacks > 1 then
+                table.insert(activeBuffs, name .. ":" .. stacks .. "/" .. maxStacks .. uptimeStr)
+            else
+                table.insert(activeBuffs, name .. uptimeStr)
+            end
+        end
+    end
+
+    if #activeBuffs > 0 then
+        Send("party say Buffs: " .. table.concat(activeBuffs, " | "))
+    else
+        Send("party say No active buffs.")
+    end
+end
+
+-- ==================== BERSERK IGNORE COUNTER ====================
+
+function OnBerserkIgnore(name, line, wildcards)
+    berserk_ignores = berserk_ignores + 1
+    Note("You have ignored a total of " .. berserk_ignores .. " attacks since last reset.")
+end
+
+function OnBerserkFading(name, line, wildcards)
+    -- Warning that berserk is about to drop
+    -- Don't announce here - wait for death or actual fade
+    Note("Berserk is fading...")
+end
+
+function OnDeathBerserkAnnounce(name, line, wildcards)
+    -- Extract mob name from death message
+    local mob_name = wildcards[1]
+
+    -- Ignore troll flesh pieces (regeneration mobs)
+    if flesh_pieces[mob_name] then
+        return
+    end
+
+    -- Announce ignore count to party when creature dies (only if we ignored any attacks)
+    -- Keep counting until berserk ends - don't reset here
+    if berserk_ignores > 0 then
+        Send("party say Berserk ignores: " .. berserk_ignores)
+    end
+end
+
+function OnCalm()
+    -- Manual calm down - announce total ignores and reset counter
+    if berserk_ignores > 0 then
+        Send("party say RED_COLOUR Calming with a total of " .. berserk_ignores .. " ignores.")
+        berserk_ignores = 0
+        Note("Ignored Attacks counter reset to zero")
+    end
+    Send("use calm down")
+end
+
+]]>
+</script>
+
+</muclient>
